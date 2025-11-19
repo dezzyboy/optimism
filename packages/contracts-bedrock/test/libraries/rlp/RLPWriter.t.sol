@@ -4,42 +4,60 @@ pragma solidity 0.8.15;
 import { RLPWriter } from "src/libraries/rlp/RLPWriter.sol";
 import { Test } from "forge-std/Test.sol";
 
+/// @title RLPWriter_writeString_Test
+/// @notice Tests the `writeString` function of the `RLPWriter` library.
 contract RLPWriter_writeString_Test is Test {
-    function test_writeString_empty_succeeds() external {
+    /// @notice Tests that the `writeString` function returns the correct RLP encoding when given
+    ///         an empty string.
+    function test_writeString_empty_succeeds() external pure {
         assertEq(RLPWriter.writeString(""), hex"80");
     }
 
-    function test_writeString_bytestring00_succeeds() external {
+    /// @notice Tests that the `writeString` function returns the correct RLP encoding when given a
+    ///         null byte string.
+    function test_writeString_bytestring00_succeeds() external pure {
         assertEq(RLPWriter.writeString("\u0000"), hex"00");
     }
 
-    function test_writeString_bytestring01_succeeds() external {
+    /// @notice Tests that the `writeString` function returns the correct RLP encoding when given a
+    ///         single byte string with value 1.
+    function test_writeString_bytestring01_succeeds() external pure {
         assertEq(RLPWriter.writeString("\u0001"), hex"01");
     }
 
-    function test_writeString_bytestring7f_succeeds() external {
+    /// @notice Tests that the `writeString` function returns the correct RLP encoding when given a
+    ///         single byte string with value 127.
+    function test_writeString_bytestring7f_succeeds() external pure {
         assertEq(RLPWriter.writeString("\u007F"), hex"7f");
     }
 
-    function test_writeString_shortstring_succeeds() external {
+    /// @notice Tests that the `writeString` function returns the correct RLP encoding when given a
+    ///         short string.
+    function test_writeString_shortstring_succeeds() external pure {
         assertEq(RLPWriter.writeString("dog"), hex"83646f67");
     }
 
-    function test_writeString_shortstring2_succeeds() external {
+    /// @notice Tests that the `writeString` function returns the correct RLP encoding when given a
+    ///         medium-length string.
+    function test_writeString_shortstring2_succeeds() external pure {
         assertEq(
             RLPWriter.writeString("Lorem ipsum dolor sit amet, consectetur adipisicing eli"),
             hex"b74c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e7365637465747572206164697069736963696e6720656c69"
         );
     }
 
-    function test_writeString_longstring_succeeds() external {
+    /// @notice Tests that the `writeString` function returns the correct RLP encoding when given a
+    ///         long string.
+    function test_writeString_longstring_succeeds() external pure {
         assertEq(
             RLPWriter.writeString("Lorem ipsum dolor sit amet, consectetur adipisicing elit"),
             hex"b8384c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e7365637465747572206164697069736963696e6720656c6974"
         );
     }
 
-    function test_writeString_longstring2_succeeds() external {
+    /// @notice Tests that the `writeString` function returns the correct RLP encoding when given a
+    ///         very long string.
+    function test_writeString_longstring2_succeeds() external pure {
         assertEq(
             RLPWriter.writeString(
                 "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur mauris magna, suscipit sed vehicula non, iaculis faucibus tortor. Proin suscipit ultricies malesuada. Duis tortor elit, dictum quis tristique eu, ultrices at risus. Morbi a est imperdiet mi ullamcorper aliquet suscipit nec lorem. Aenean quis leo mollis, vulputate elit varius, consequat enim. Nulla ultrices turpis justo, et posuere urna consectetur nec. Proin non convallis metus. Donec tempor ipsum in mauris congue sollicitudin. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Suspendisse convallis sem vel massa faucibus, eget lacinia lacus tempor. Nulla quis ultricies purus. Proin auctor rhoncus nibh condimentum mollis. Aliquam consequat enim at metus luctus, a eleifend purus egestas. Curabitur at nibh metus. Nam bibendum, neque at auctor tristique, lorem libero aliquet arcu, non interdum tellus lectus sit amet eros. Cras rhoncus, metus ac ornare cursus, dolor justo ultrices metus, at ullamcorper volutpat"
@@ -49,46 +67,77 @@ contract RLPWriter_writeString_Test is Test {
     }
 }
 
+/// @title RLPWriter_writeUint_Test
+/// @notice Tests the `writeUint` function of the `RLPWriter` library.
 contract RLPWriter_writeUint_Test is Test {
-    function test_writeUint_zero_succeeds() external {
+    /// @notice Tests that the `writeUint` function returns the correct RLP encoding when given
+    ///         zero.
+    function test_writeUint_zero_succeeds() external pure {
         assertEq(RLPWriter.writeUint(0x0), hex"80");
     }
 
-    function test_writeUint_smallint_succeeds() external {
+    /// @notice Tests that the `writeUint` function returns the correct RLP encoding when given a
+    ///         small integer value of 1.
+    function test_writeUint_smallint_succeeds() external pure {
         assertEq(RLPWriter.writeUint(1), hex"01");
     }
 
-    function test_writeUint_smallint2_succeeds() external {
+    /// @notice Tests that the `writeUint` function returns the correct RLP encoding when given a
+    ///         small integer value of 16.
+    function test_writeUint_smallint2_succeeds() external pure {
         assertEq(RLPWriter.writeUint(16), hex"10");
     }
 
-    function test_writeUint_smallint3_succeeds() external {
+    /// @notice Tests that the `writeUint` function returns the correct RLP encoding when given a
+    ///         small integer value of 79.
+    function test_writeUint_smallint3_succeeds() external pure {
         assertEq(RLPWriter.writeUint(79), hex"4f");
     }
 
-    function test_writeUint_smallint4_succeeds() external {
+    /// @notice Tests that the `writeUint` function returns the correct RLP encoding when given a
+    ///         small integer value of 127.
+    function test_writeUint_smallint4_succeeds() external pure {
         assertEq(RLPWriter.writeUint(127), hex"7f");
     }
 
-    function test_writeUint_mediumint_succeeds() external {
+    /// @notice Tests that the `writeUint` function returns the correct RLP encoding when given a
+    ///         medium integer value of 128.
+    function test_writeUint_mediumint_succeeds() external pure {
         assertEq(RLPWriter.writeUint(128), hex"8180");
     }
 
-    function test_writeUint_mediumint2_succeeds() external {
+    /// @notice Tests that the `writeUint` function returns the correct RLP encoding when given a
+    ///         medium integer value of 1000.
+    function test_writeUint_mediumint2_succeeds() external pure {
         assertEq(RLPWriter.writeUint(1000), hex"8203e8");
     }
 
-    function test_writeUint_mediumint3_succeeds() external {
+    /// @notice Tests that the `writeUint` function returns the correct RLP encoding when given a
+    ///         medium integer value of 100000.
+    function test_writeUint_mediumint3_succeeds() external pure {
         assertEq(RLPWriter.writeUint(100000), hex"830186a0");
     }
+
+    /// @notice Tests RLP encoding produces valid output for any uint256 value.
+    /// @param _value Random uint256 value to encode.
+    function testFuzz_writeUint_anyValue_succeeds(uint256 _value) external pure {
+        bytes memory encoded = RLPWriter.writeUint(_value);
+        assertGt(encoded.length, 0);
+    }
 }
+/// @title RLPWriter_writeList_Test
+/// @notice Tests the `writeList` function of the `RLPWriter` library.
 
 contract RLPWriter_writeList_Test is Test {
-    function test_writeList_empty_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given an
+    ///         empty list.
+    function test_writeList_empty_succeeds() external pure {
         assertEq(RLPWriter.writeList(new bytes[](0)), hex"c0");
     }
 
-    function test_writeList_stringList_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given a
+    ///         list of strings.
+    function test_writeList_stringList_succeeds() external pure {
         bytes[] memory list = new bytes[](3);
         list[0] = RLPWriter.writeString("dog");
         list[1] = RLPWriter.writeString("god");
@@ -97,7 +146,9 @@ contract RLPWriter_writeList_Test is Test {
         assertEq(RLPWriter.writeList(list), hex"cc83646f6783676f6483636174");
     }
 
-    function test_writeList_multiList_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given a
+    ///         mixed list containing strings, nested lists, and integers.
+    function test_writeList_multiList_succeeds() external pure {
         bytes[] memory list = new bytes[](3);
         bytes[] memory list2 = new bytes[](1);
         list2[0] = RLPWriter.writeUint(4);
@@ -109,7 +160,9 @@ contract RLPWriter_writeList_Test is Test {
         assertEq(RLPWriter.writeList(list), hex"c6827a77c10401");
     }
 
-    function test_writeList_shortListMax1_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given a
+    ///         short list of 55 bytes.
+    function test_writeList_shortListMax1_succeeds() external pure {
         bytes[] memory list = new bytes[](11);
         list[0] = RLPWriter.writeString("asdf");
         list[1] = RLPWriter.writeString("qwer");
@@ -129,7 +182,9 @@ contract RLPWriter_writeList_Test is Test {
         );
     }
 
-    function test_writeList_longlist1_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given a
+    ///         long list containing nested lists.
+    function test_writeList_longlist1_succeeds() external pure {
         bytes[] memory list = new bytes[](4);
         bytes[] memory list2 = new bytes[](3);
 
@@ -148,7 +203,9 @@ contract RLPWriter_writeList_Test is Test {
         );
     }
 
-    function test_writeList_longlist2_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given a
+    ///         very long list with 32 nested lists.
+    function test_writeList_longlist2_succeeds() external pure {
         bytes[] memory list = new bytes[](32);
         bytes[] memory list2 = new bytes[](3);
 
@@ -166,7 +223,9 @@ contract RLPWriter_writeList_Test is Test {
         );
     }
 
-    function test_writeList_listoflists_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given a
+    ///         nested list structure with empty lists.
+    function test_writeList_listoflists_succeeds() external pure {
         // [ [ [], [] ], [] ]
         bytes[] memory list = new bytes[](2);
         bytes[] memory list2 = new bytes[](2);
@@ -180,7 +239,9 @@ contract RLPWriter_writeList_Test is Test {
         assertEq(RLPWriter.writeList(list), hex"c4c2c0c0c0");
     }
 
-    function test_writeList_listoflists2_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given a
+    ///         complex nested list structure.
+    function test_writeList_listoflists2_succeeds() external pure {
         // [ [], [[]], [ [], [[]] ] ]
         bytes[] memory list = new bytes[](3);
         list[0] = RLPWriter.writeList(new bytes[](0));
@@ -199,7 +260,9 @@ contract RLPWriter_writeList_Test is Test {
         assertEq(RLPWriter.writeList(list), hex"c7c0c1c0c3c0c1c0");
     }
 
-    function test_writeList_dictTest1_succeeds() external {
+    /// @notice Tests that the `writeList` function returns the correct RLP encoding when given a
+    ///         dictionary-like structure with key-value pairs.
+    function test_writeList_dictTest1_succeeds() external pure {
         bytes[] memory list = new bytes[](4);
 
         bytes[] memory list1 = new bytes[](2);
@@ -227,5 +290,46 @@ contract RLPWriter_writeList_Test is Test {
             RLPWriter.writeList(list),
             hex"ecca846b6579318476616c31ca846b6579328476616c32ca846b6579338476616c33ca846b6579348476616c34"
         );
+    }
+}
+
+/// @title RLPWriter_writeAddress_Test
+/// @notice Tests the `writeAddress` function of the `RLPWriter` library.
+contract RLPWriter_writeAddress_Test is Test {
+    /// @notice Tests that the `writeAddress` function returns correct RLP encoding for zero
+    ///         address.
+    function test_writeAddress_zeroAddress_succeeds() external pure {
+        assertEq(RLPWriter.writeAddress(address(0)), hex"940000000000000000000000000000000000000000");
+    }
+
+    /// @notice Tests that the `writeAddress` function returns correct RLP encoding for non-zero
+    ///         address.
+    function test_writeAddress_nonZeroAddress_succeeds() external pure {
+        assertEq(
+            RLPWriter.writeAddress(0x1234567890123456789012345678901234567890),
+            hex"941234567890123456789012345678901234567890"
+        );
+    }
+
+    /// @notice Tests RLP encoding produces valid output for any address.
+    /// @param _addr Random address to encode.
+    function testFuzz_writeAddress_anyAddress_succeeds(address _addr) external pure {
+        bytes memory encoded = RLPWriter.writeAddress(_addr);
+        assertEq(encoded.length, 21);
+        assertEq(uint8(encoded[0]), 0x94);
+    }
+}
+
+/// @title RLPWriter_writeBool_Test
+/// @notice Tests the `writeBool` function of the `RLPWriter` library.
+contract RLPWriter_writeBool_Test is Test {
+    /// @notice Tests that the `writeBool` function returns correct RLP encoding for true.
+    function test_writeBool_true_succeeds() external pure {
+        assertEq(RLPWriter.writeBool(true), hex"01");
+    }
+
+    /// @notice Tests that the `writeBool` function returns correct RLP encoding for false.
+    function test_writeBool_false_succeeds() external pure {
+        assertEq(RLPWriter.writeBool(false), hex"80");
     }
 }

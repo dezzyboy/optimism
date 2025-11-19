@@ -40,13 +40,13 @@ type SimpleAsyncGossiper struct {
 }
 
 // To avoid import cycles, we define a new Network interface here
-// this interface is compatable with driver.Network
+// this interface is compatible with driver.Network
 type Network interface {
-	PublishL2Payload(ctx context.Context, payload *eth.ExecutionPayloadEnvelope) error
+	SignAndPublishL2Payload(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error
 }
 
 // To avoid import cycles, we define a new Metrics interface here
-// this interface is compatable with driver.Metrics
+// this interface is compatible with driver.Metrics
 type Metrics interface {
 	RecordPublishingError()
 }
@@ -90,6 +90,11 @@ func (p *SimpleAsyncGossiper) Clear() {
 // Stop is a synchronous function to stop the async routine
 // it blocks until the async routine accepts the signal
 func (p *SimpleAsyncGossiper) Stop() {
+	// if the gossiping isn't running, nothing to do
+	if !p.running.Load() {
+		return
+	}
+
 	p.stop <- struct{}{}
 }
 
@@ -97,10 +102,9 @@ func (p *SimpleAsyncGossiper) Stop() {
 // each behavior of the loop is handled by a select case on a channel, plus an internal handler function call
 func (p *SimpleAsyncGossiper) Start() {
 	// if the gossiping is already running, return
-	if p.running.Load() {
+	if !p.running.CompareAndSwap(false, true) {
 		return
 	}
-	p.running.Store(true)
 	// else, start the handling loop
 	go func() {
 		defer p.running.Store(false)
@@ -128,7 +132,7 @@ func (p *SimpleAsyncGossiper) Start() {
 // it is called by the Start loop when a new payload is set
 // the payload is only stored if the publish is successful
 func (p *SimpleAsyncGossiper) gossip(ctx context.Context, payload *eth.ExecutionPayloadEnvelope) {
-	if err := p.net.PublishL2Payload(ctx, payload); err == nil {
+	if err := p.net.SignAndPublishL2Payload(ctx, payload); err == nil {
 		p.currentPayload = payload
 	} else {
 		p.log.Warn("failed to publish newly created block",

@@ -2,6 +2,7 @@ package compressor
 
 import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	"golang.org/x/exp/maps"
 )
 
 type FactoryFunc func(Config) (derive.Compressor, error)
@@ -10,7 +11,6 @@ const (
 	RatioKind  = "ratio"
 	ShadowKind = "shadow"
 	NoneKind   = "none"
-	BlindKind  = "blind"
 
 	// CloseOverheadZlib is the number of final bytes a [zlib.Writer] call writes
 	// to the output buffer.
@@ -21,13 +21,10 @@ var Kinds = map[string]FactoryFunc{
 	RatioKind:  NewRatioCompressor,
 	ShadowKind: NewShadowCompressor,
 	NoneKind:   NewNonCompressor,
-	BlindKind:  NewBlindCompressor,
 }
 
 var KindKeys []string
 
 func init() {
-	for k := range Kinds {
-		KindKeys = append(KindKeys, k)
-	}
+	KindKeys = maps.Keys(Kinds)
 }

@@ -1,23 +1,26 @@
 package fakebeacon
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/blobstore"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/beacon/engine"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -27,23 +30,25 @@ import (
 type FakeBeacon struct {
 	log log.Logger
 
-	// directory to store blob contents in after the blobs are persisted in a block
-	blobsDir  string
+	// in-memory blob store
+	blobStore *blobstore.Store
 	blobsLock sync.Mutex
 
 	beaconSrv         *http.Server
 	beaconAPIListener net.Listener
 
+	fuluTime    *uint64
 	genesisTime uint64
 	blockTime   uint64
 }
 
-func NewBeacon(log log.Logger, blobsDir string, genesisTime uint64, blockTime uint64) *FakeBeacon {
+func NewBeacon(log log.Logger, blobStore *blobstore.Store, genesisTime uint64, blockTime uint64, fuluTime *uint64) *FakeBeacon {
 	return &FakeBeacon{
 		log:         log,
-		blobsDir:    blobsDir,
+		blobStore:   blobStore,
 		genesisTime: genesisTime,
 		blockTime:   blockTime,
+		fuluTime:    fuluTime,
 	}
 }
 
@@ -76,8 +81,12 @@ func (f *FakeBeacon) Start(addr string) error {
 			return
 		}
 		bundle, err := f.LoadBlobsBundle(slot)
-		if err != nil {
-			f.log.Error("failed to load blobs bundle", "slot", slot)
+		if errors.Is(err, ethereum.NotFound) {
+			f.log.Error("failed to load blobs bundle - not found", "slot", slot, "err", err)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		} else if err != nil {
+			f.log.Error("failed to load blobs bundle", "slot", slot, "err", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -112,20 +121,74 @@ func (f *FakeBeacon) Start(addr string) error {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+
+			var proof eth.Bytes48
+			if f.fuluTime == nil || time.Now().Before(time.Unix(int64(*f.fuluTime), 0)) {
+				proof = eth.Bytes48(bundle.Proofs[ix])
+			} else {
+				// From Fulu onwards, a blob proof is not provided.
+				// Derivation should not rely on a valid proof here.
+				proof = eth.Bytes48(kzg4844.Proof(hexutil.MustDecode("0xc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")))
+			}
+
 			sidecars[i] = &eth.APIBlobSidecar{
 				Index:         eth.Uint64String(ix),
 				KZGCommitment: eth.Bytes48(bundle.Commitments[ix]),
-				KZGProof:      eth.Bytes48(bundle.Proofs[ix]),
+				KZGProof:      proof,
 				SignedBlockHeader: eth.SignedBeaconBlockHeader{
 					Message: eth.BeaconBlockHeader{
 						StateRoot: mockBeaconBlockRoot,
 						Slot:      eth.Uint64String(slot),
 					},
 				},
+				InclusionProof: make([]eth.Bytes32, 0),
 			}
 			copy(sidecars[i].Blob[:], bundle.Blobs[ix])
 		}
 		if err := json.NewEncoder(w).Encode(&eth.APIGetBlobSidecarsResponse{Data: sidecars}); err != nil {
+			f.log.Error("blobs handler err", "err", err)
+		}
+	})
+	mux.HandleFunc("/eth/v1/beacon/blobs/", func(w http.ResponseWriter, r *http.Request) {
+		if f.fuluTime == nil || time.Now().Before(time.Unix(int64(*f.fuluTime), 0)) {
+			f.log.Warn("post-Fulu blobs endpoint queried before Fulu hardfork")
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		blockID := strings.TrimPrefix(r.URL.Path, "/eth/v1/beacon/blobs/")
+		slot, err := strconv.ParseUint(blockID, 10, 64)
+		if err != nil {
+			f.log.Error("could not parse block id from request", "url", r.URL.Path, "err", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		bundle, err := f.LoadBlobsBundle(slot)
+		if err != nil {
+			f.log.Error("failed to load blobs bundle", "slot", slot, "err", err)
+			if errors.Is(err, ethereum.NotFound) {
+				w.WriteHeader(http.StatusNotFound)
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+			return
+		}
+
+		query := r.URL.Query()
+		versionedHashes := make([]common.Hash, 0, len(bundle.Blobs))
+		for _, raw := range query["versioned_hashes"] {
+			versionedHashes = append(versionedHashes, common.HexToHash(raw))
+		}
+		blobs := make([]*eth.Blob, 0)
+		for i := range bundle.Blobs {
+			blob := eth.Blob(bundle.Blobs[i])
+			versionedHash := eth.KZGToVersionedHash(kzg4844.Commitment(bundle.Commitments[i]))
+			if len(versionedHashes) > 0 && !slices.Contains(versionedHashes, versionedHash) {
+				continue
+			}
+			blobs = append(blobs, &blob)
+		}
+
+		if err := json.NewEncoder(w).Encode(&eth.APIBeaconBlobsResponse{Data: blobs}); err != nil {
 			f.log.Error("blobs handler err", "err", err)
 		}
 	})
@@ -134,8 +197,6 @@ func (f *FakeBeacon) Start(addr string) error {
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			f.log.Error("version handler err", "err", err)
-		} else {
-			w.WriteHeader(http.StatusOK)
 		}
 	})
 	f.beaconSrv = &http.Server{
@@ -154,20 +215,23 @@ func (f *FakeBeacon) Start(addr string) error {
 }
 
 func (f *FakeBeacon) StoreBlobsBundle(slot uint64, bundle *engine.BlobsBundleV1) error {
-	data, err := json.Marshal(bundle)
-	if err != nil {
-		return fmt.Errorf("failed to encode blobs bundle of slot %d: %w", slot, err)
-	}
-
 	f.blobsLock.Lock()
 	defer f.blobsLock.Unlock()
-	bundlePath := fmt.Sprintf("blobs_bundle_%d.json", slot)
-	if err := os.MkdirAll(f.blobsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create dir for blob storage: %w", err)
-	}
-	err = os.WriteFile(filepath.Join(f.blobsDir, bundlePath), data, 0755)
-	if err != nil {
-		return fmt.Errorf("failed to write blobs bundle of slot %d: %w", slot, err)
+
+	// Solve for the slot timestamp.
+	// slot = (timestamp - genesis) / slot_time
+	// timestamp = slot * slot_time + genesis
+	slotTimestamp := slot*f.blockTime + f.genesisTime
+
+	for i, b := range bundle.Blobs {
+		f.blobStore.StoreBlob(
+			slotTimestamp,
+			eth.IndexedBlobHash{
+				Index: uint64(i),
+				Hash:  eth.KZGToVersionedHash(kzg4844.Commitment(bundle.Commitments[i])),
+			},
+			(*eth.Blob)(b[:]),
+		)
 	}
 	return nil
 }
@@ -175,19 +239,30 @@ func (f *FakeBeacon) StoreBlobsBundle(slot uint64, bundle *engine.BlobsBundleV1)
 func (f *FakeBeacon) LoadBlobsBundle(slot uint64) (*engine.BlobsBundleV1, error) {
 	f.blobsLock.Lock()
 	defer f.blobsLock.Unlock()
-	bundlePath := fmt.Sprintf("blobs_bundle_%d.json", slot)
-	data, err := os.ReadFile(filepath.Join(f.blobsDir, bundlePath))
+
+	// Solve for the slot timestamp.
+	// slot = (timestamp - genesis) / slot_time
+	// timestamp = slot * slot_time + genesis
+	slotTimestamp := slot*f.blockTime + f.genesisTime
+
+	// Load blobs from the store
+	blobs, err := f.blobStore.GetAllSidecars(context.Background(), slotTimestamp)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("no blobs bundle found for slot %d (%q): %w", slot, bundlePath, ethereum.NotFound)
-		} else {
-			return nil, fmt.Errorf("failed to read blobs bundle of slot %d (%q): %w", slot, bundlePath, err)
-		}
+		return nil, fmt.Errorf("failed to load blobs from store: %w", err)
 	}
-	var out engine.BlobsBundleV1
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("failed to decode blobs bundle of slot %d (%q): %w", slot, bundlePath, err)
+
+	// Convert blobs to the bundle
+	out := engine.BlobsBundleV1{
+		Commitments: make([]hexutil.Bytes, len(blobs)),
+		Proofs:      make([]hexutil.Bytes, len(blobs)),
+		Blobs:       make([]hexutil.Bytes, len(blobs)),
 	}
+	for _, b := range blobs {
+		out.Commitments[b.Index] = hexutil.Bytes(b.KZGCommitment[:])
+		out.Proofs[b.Index] = hexutil.Bytes(b.KZGProof[:])
+		out.Blobs[b.Index] = hexutil.Bytes(b.Blob[:])
+	}
+
 	return &out, nil
 }
 

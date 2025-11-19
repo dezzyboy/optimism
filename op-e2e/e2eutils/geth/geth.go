@@ -1,14 +1,19 @@
 package geth
 
 import (
+	"context"
 	"fmt"
 	"math/big"
+	"time"
 
-	"github.com/ethereum-optimism/optimism/op-service/clock"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
+	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/catalyst"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
@@ -16,20 +21,32 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/rpc"
 
 	// Force-load the tracer engines to trigger registration
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
+
+	"github.com/ethereum-optimism/optimism/op-service/clock"
 )
 
-func InitL1(chainID uint64, blockTime uint64, genesis *core.Genesis, c clock.Clock, blobPoolDir string, beaconSrv Beacon, opts ...GethOption) (*node.Node, *eth.Ethereum, error) {
+func InitL1(blockTime uint64, finalizedDistance uint64, genesis *core.Genesis, c clock.Clock, blobPoolDir string, beaconSrv Beacon, opts ...GethOption) (*GethInstance, *FakePoS, error) {
 	ethConfig := &ethconfig.Config{
-		NetworkId: chainID,
+		NetworkId: genesis.Config.ChainID.Uint64(),
 		Genesis:   genesis,
 		BlobPool: blobpool.Config{
 			Datadir:   blobPoolDir,
 			Datacap:   blobpool.DefaultConfig.Datacap,
 			PriceBump: blobpool.DefaultConfig.PriceBump,
+		},
+		StateScheme: rawdb.HashScheme,
+		Miner: miner.Config{
+			PendingFeeRecipient: common.Address{},
+			ExtraData:           nil,
+			GasCeil:             0,
+			GasPrice:            nil,
+			// enough to build blocks within 1 second, but high enough to avoid unnecessary test CPU cycles.
+			Recommit: time.Millisecond * 400,
 		},
 	}
 	nodeConfig := &node.Config{
@@ -38,31 +55,59 @@ func InitL1(chainID uint64, blockTime uint64, genesis *core.Genesis, c clock.Clo
 		HTTPPort:    0,
 		WSHost:      "127.0.0.1",
 		WSPort:      0,
-		WSModules:   []string{"debug", "admin", "eth", "txpool", "net", "rpc", "web3", "personal", "engine"},
-		HTTPModules: []string{"debug", "admin", "eth", "txpool", "net", "rpc", "web3", "personal", "engine"},
+		WSModules:   []string{"debug", "admin", "eth", "txpool", "net", "rpc", "web3", "personal", "engine", "miner"},
+		HTTPModules: []string{"debug", "admin", "eth", "txpool", "net", "rpc", "web3", "personal", "engine", "miner"},
 	}
 
-	l1Node, l1Eth, err := createGethNode(false, nodeConfig, ethConfig, opts...)
+	gethInstance, err := createGethNode(false, nodeConfig, ethConfig, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Activate merge
-	l1Eth.Merger().FinalizePoS()
+
+	fakepos := NewFakePoS(&gethBackend{
+		chain: gethInstance.Backend.BlockChain(),
+	}, catalyst.NewConsensusAPI(gethInstance.Backend), c, log.Root(), blockTime, finalizedDistance, beaconSrv, gethInstance.Backend.BlockChain().Config())
 
 	// Instead of running a whole beacon node, we run this fake-proof-of-stake sidecar that sequences L1 blocks using the Engine API.
-	l1Node.RegisterLifecycle(&fakePoS{
-		clock:     c,
-		eth:       l1Eth,
-		log:       log.Root(), // geth logger is global anyway. Would be nice to replace with a local logger though.
-		blockTime: blockTime,
-		// for testing purposes we make it really fast, otherwise we don't see it finalize in short tests
-		finalizedDistance: 8,
-		safeDistance:      4,
-		engineAPI:         catalyst.NewConsensusAPI(l1Eth),
-		beacon:            beaconSrv,
-	})
+	gethInstance.Node.RegisterLifecycle(fakepos)
 
-	return l1Node, l1Eth, nil
+	return gethInstance, fakepos, nil
+}
+
+func WithAuth(jwtPath string) GethOption {
+	return func(_ *ethconfig.Config, nodeCfg *node.Config) error {
+		nodeCfg.AuthAddr = "127.0.0.1"
+		nodeCfg.AuthPort = 0
+		nodeCfg.JWTSecret = jwtPath
+		return nil
+	}
+}
+
+type gethBackend struct {
+	chain *core.BlockChain
+}
+
+func (b *gethBackend) HeaderByNumber(_ context.Context, num *big.Int) (*types.Header, error) {
+	if num == nil {
+		return b.chain.CurrentBlock(), nil
+	}
+	var h *types.Header
+	if num.IsInt64() && num.Int64() < 0 {
+		switch num.Int64() {
+		case int64(rpc.LatestBlockNumber):
+			h = b.chain.CurrentBlock()
+		case int64(rpc.SafeBlockNumber):
+			h = b.chain.CurrentSafeBlock()
+		case int64(rpc.FinalizedBlockNumber):
+			h = b.chain.CurrentFinalBlock()
+		}
+	} else {
+		h = b.chain.GetHeaderByNumber(num.Uint64())
+	}
+	if h == nil {
+		return nil, ethereum.NotFound
+	}
+	return h, nil
 }
 
 func defaultNodeConfig(name string, jwtPath string) *node.Config {
@@ -74,8 +119,8 @@ func defaultNodeConfig(name string, jwtPath string) *node.Config {
 		AuthPort:    0,
 		HTTPHost:    "127.0.0.1",
 		HTTPPort:    0,
-		WSModules:   []string{"debug", "admin", "eth", "txpool", "net", "rpc", "web3", "personal", "engine"},
-		HTTPModules: []string{"debug", "admin", "eth", "txpool", "net", "rpc", "web3", "personal", "engine"},
+		WSModules:   []string{"debug", "admin", "eth", "txpool", "net", "rpc", "web3", "personal", "engine", "miner"},
+		HTTPModules: []string{"debug", "admin", "eth", "txpool", "net", "rpc", "web3", "personal", "engine", "miner"},
 		JWTSecret:   jwtPath,
 	}
 }
@@ -83,18 +128,21 @@ func defaultNodeConfig(name string, jwtPath string) *node.Config {
 type GethOption func(ethCfg *ethconfig.Config, nodeCfg *node.Config) error
 
 // InitL2 inits a L2 geth node.
-func InitL2(name string, l2ChainID *big.Int, genesis *core.Genesis, jwtPath string, opts ...GethOption) (*node.Node, *eth.Ethereum, error) {
+func InitL2(name string, genesis *core.Genesis, jwtPath string, opts ...GethOption) (*GethInstance, error) {
 	ethConfig := &ethconfig.Config{
-		NetworkId: l2ChainID.Uint64(),
-		Genesis:   genesis,
+		NetworkId:   genesis.Config.ChainID.Uint64(),
+		Genesis:     genesis,
+		StateScheme: rawdb.HashScheme,
 		Miner: miner.Config{
-			Etherbase:         common.Address{},
-			ExtraData:         nil,
-			GasFloor:          0,
-			GasCeil:           0,
-			GasPrice:          nil,
-			Recommit:          0,
-			NewPayloadTimeout: 0,
+			PendingFeeRecipient: common.Address{},
+			ExtraData:           nil,
+			GasCeil:             0,
+			GasPrice:            nil,
+			// enough to build blocks within 1 second, but high enough to avoid unnecessary test CPU cycles.
+			Recommit: time.Millisecond * 400,
+		},
+		TxPool: legacypool.Config{
+			NoLocals: true,
 		},
 	}
 	nodeConfig := defaultNodeConfig(fmt.Sprintf("l2-geth-%v", name), jwtPath)
@@ -103,25 +151,27 @@ func InitL2(name string, l2ChainID *big.Int, genesis *core.Genesis, jwtPath stri
 
 // createGethNode creates an in-memory geth node based on the configuration.
 // The private keys are added to the keystore and are unlocked.
-// If the node is l2, catalyst is enabled.
+// Catalyst is always enabled. If the node is an L1, the catalyst API can be used by alternative
+// sequencers (e.g., op-test-sequencer) if the default FakePoS is stopped.
 // The node should be started and then closed when done.
-func createGethNode(l2 bool, nodeCfg *node.Config, ethCfg *ethconfig.Config, opts ...GethOption) (*node.Node, *eth.Ethereum, error) {
+func createGethNode(l2 bool, nodeCfg *node.Config, ethCfg *ethconfig.Config, opts ...GethOption) (*GethInstance, error) {
 	for i, opt := range opts {
 		if err := opt(ethCfg, nodeCfg); err != nil {
-			return nil, nil, fmt.Errorf("failed to apply geth option %d: %w", i, err)
+			return nil, fmt.Errorf("failed to apply geth option %d: %w", i, err)
 		}
 	}
+	ethCfg.StateScheme = rawdb.HashScheme
 	ethCfg.NoPruning = true // force everything to be an archive node
 	n, err := node.New(nodeCfg)
 	if err != nil {
 		n.Close()
-		return nil, nil, err
+		return nil, err
 	}
 
 	backend, err := eth.New(n, ethCfg)
 	if err != nil {
 		n.Close()
-		return nil, nil, err
+		return nil, err
 
 	}
 
@@ -131,12 +181,12 @@ func createGethNode(l2 bool, nodeCfg *node.Config, ethCfg *ethconfig.Config, opt
 
 	n.RegisterAPIs(tracers.APIs(backend.APIBackend))
 
-	// Enable catalyst if l2
-	if l2 {
-		if err := catalyst.Register(n, backend); err != nil {
-			n.Close()
-			return nil, nil, err
-		}
+	if err := catalyst.Register(n, backend); err != nil {
+		n.Close()
+		return nil, err
 	}
-	return n, backend, nil
+	return &GethInstance{
+		Backend: backend,
+		Node:    n,
+	}, nil
 }

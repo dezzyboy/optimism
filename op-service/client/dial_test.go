@@ -1,13 +1,17 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+const defaultConnectTimeout = 5 * time.Second
 
 func TestIsURLAvailableLocal(t *testing.T) {
 	listener, err := net.Listen("tcp4", ":0")
@@ -19,38 +23,38 @@ func TestIsURLAvailableLocal(t *testing.T) {
 	addr := fmt.Sprintf("http://localhost:%s", parts[1])
 
 	// True & False with ports
-	require.True(t, IsURLAvailable(addr))
-	require.False(t, IsURLAvailable("http://localhost:0"))
+	require.True(t, IsURLAvailable(context.Background(), addr, defaultConnectTimeout))
+	require.False(t, IsURLAvailable(context.Background(), "http://localhost:0", defaultConnectTimeout))
 
 	// Fail open if we don't recognize the scheme
-	require.True(t, IsURLAvailable("mailto://example.com"))
+	require.True(t, IsURLAvailable(context.Background(), "mailto://example.com", defaultConnectTimeout))
 
 }
 
 func TestIsURLAvailableNonLocal(t *testing.T) {
-	if !IsURLAvailable("http://example.com") {
+	if !IsURLAvailable(context.Background(), "http://example.com", defaultConnectTimeout) {
 		t.Skip("No internet connection found, skipping this test")
 	}
 
 	// True without ports. http & https
-	require.True(t, IsURLAvailable("http://example.com"))
-	require.True(t, IsURLAvailable("http://example.com/hello"))
-	require.True(t, IsURLAvailable("https://example.com"))
-	require.True(t, IsURLAvailable("https://example.com/hello"))
+	require.True(t, IsURLAvailable(context.Background(), "http://example.com", defaultConnectTimeout))
+	require.True(t, IsURLAvailable(context.Background(), "http://example.com/hello", defaultConnectTimeout))
+	require.True(t, IsURLAvailable(context.Background(), "https://example.com", defaultConnectTimeout))
+	require.True(t, IsURLAvailable(context.Background(), "https://example.com/hello", defaultConnectTimeout))
 
 	// True without ports. ws & wss
-	require.True(t, IsURLAvailable("ws://example.com"))
-	require.True(t, IsURLAvailable("ws://example.com/hello"))
-	require.True(t, IsURLAvailable("wss://example.com"))
-	require.True(t, IsURLAvailable("wss://example.com/hello"))
+	require.True(t, IsURLAvailable(context.Background(), "ws://example.com", defaultConnectTimeout))
+	require.True(t, IsURLAvailable(context.Background(), "ws://example.com/hello", defaultConnectTimeout))
+	require.True(t, IsURLAvailable(context.Background(), "wss://example.com", defaultConnectTimeout))
+	require.True(t, IsURLAvailable(context.Background(), "wss://example.com/hello", defaultConnectTimeout))
 
 	// False without ports
-	require.False(t, IsURLAvailable("http://fakedomainnamethatdoesnotexistandshouldneverexist.com"))
-	require.False(t, IsURLAvailable("http://fakedomainnamethatdoesnotexistandshouldneverexist.com/hello"))
-	require.False(t, IsURLAvailable("https://fakedomainnamethatdoesnotexistandshouldneverexist.com"))
-	require.False(t, IsURLAvailable("https://fakedomainnamethatdoesnotexistandshouldneverexist.com/hello"))
-	require.False(t, IsURLAvailable("ws://fakedomainnamethatdoesnotexistandshouldneverexist.com"))
-	require.False(t, IsURLAvailable("ws://fakedomainnamethatdoesnotexistandshouldneverexist.com/hello"))
-	require.False(t, IsURLAvailable("wss://fakedomainnamethatdoesnotexistandshouldneverexist.com"))
-	require.False(t, IsURLAvailable("wss://fakedomainnamethatdoesnotexistandshouldneverexist.com/hello"))
+	require.False(t, IsURLAvailable(context.Background(), "http://fakedomainnamethatdoesnotexistandshouldneverexist.com", defaultConnectTimeout))
+	require.False(t, IsURLAvailable(context.Background(), "http://fakedomainnamethatdoesnotexistandshouldneverexist.com/hello", defaultConnectTimeout))
+	require.False(t, IsURLAvailable(context.Background(), "https://fakedomainnamethatdoesnotexistandshouldneverexist.com", defaultConnectTimeout))
+	require.False(t, IsURLAvailable(context.Background(), "https://fakedomainnamethatdoesnotexistandshouldneverexist.com/hello", defaultConnectTimeout))
+	require.False(t, IsURLAvailable(context.Background(), "ws://fakedomainnamethatdoesnotexistandshouldneverexist.com", defaultConnectTimeout))
+	require.False(t, IsURLAvailable(context.Background(), "ws://fakedomainnamethatdoesnotexistandshouldneverexist.com/hello", defaultConnectTimeout))
+	require.False(t, IsURLAvailable(context.Background(), "wss://fakedomainnamethatdoesnotexistandshouldneverexist.com", defaultConnectTimeout))
+	require.False(t, IsURLAvailable(context.Background(), "wss://fakedomainnamethatdoesnotexistandshouldneverexist.com/hello", defaultConnectTimeout))
 }

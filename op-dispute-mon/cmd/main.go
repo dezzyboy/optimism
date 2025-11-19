@@ -14,8 +14,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-dispute-mon/version"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
+	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
-	"github.com/ethereum-optimism/optimism/op-service/opio"
 )
 
 var (
@@ -28,7 +28,7 @@ var VersionWithMeta = opservice.FormatVersion(version.Version, GitCommit, GitDat
 
 func main() {
 	args := os.Args
-	ctx := opio.WithInterruptBlocker(context.Background())
+	ctx := ctxinterrupt.WithSignalWaiterMain(context.Background())
 	if err := run(ctx, args, monitor.Main); err != nil {
 		log.Crit("Application failed", "err", err)
 	}
@@ -56,6 +56,11 @@ func run(ctx context.Context, args []string, action ConfiguredLifecycle) error {
 		if err != nil {
 			return nil, err
 		}
+		logger.Info("RPC endpoints",
+			"l1", cfg.L1EthRpc,
+			"rollup", cfg.RollupRpcs,
+			"supervisor", cfg.SupervisorRpcs,
+		)
 		return action(ctx.Context, logger, cfg)
 	})
 	return app.RunContext(ctx, args)

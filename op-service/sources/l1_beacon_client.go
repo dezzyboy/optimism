@@ -9,11 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
@@ -23,6 +26,7 @@ const (
 	specMethod           = "eth/v1/config/spec"
 	genesisMethod        = "eth/v1/beacon/genesis"
 	sidecarsMethodPrefix = "eth/v1/beacon/blob_sidecars/"
+	blobsMethodPrefix    = "eth/v1/beacon/blobs/"
 )
 
 type L1BeaconClientConfig struct {
@@ -31,29 +35,12 @@ type L1BeaconClientConfig struct {
 
 // L1BeaconClient is a high level golang client for the Beacon API.
 type L1BeaconClient struct {
-	cl   BeaconClient
-	pool *ClientPool[BlobSideCarsFetcher]
+	cl   apis.BeaconClient
+	pool *ClientPool[apis.BlobSideCarsClient]
 	cfg  L1BeaconClientConfig
 
 	initLock     sync.Mutex
 	timeToSlotFn TimeToSlotFn
-}
-
-// BeaconClient is a thin wrapper over the Beacon APIs.
-//
-//go:generate mockery --name BeaconClient --with-expecter=true
-type BeaconClient interface {
-	NodeVersion(ctx context.Context) (string, error)
-	ConfigSpec(ctx context.Context) (eth.APIConfigResponse, error)
-	BeaconGenesis(ctx context.Context) (eth.APIGenesisResponse, error)
-	BeaconBlobSideCars(ctx context.Context, fetchAllSidecars bool, slot uint64, hashes []eth.IndexedBlobHash) (eth.APIGetBlobSidecarsResponse, error)
-}
-
-// BlobSideCarsFetcher is a thin wrapper over the Beacon APIs.
-//
-//go:generate mockery --name BlobSideCarsFetcher --with-expecter=true
-type BlobSideCarsFetcher interface {
-	BeaconBlobSideCars(ctx context.Context, fetchAllSidecars bool, slot uint64, hashes []eth.IndexedBlobHash) (eth.APIGetBlobSidecarsResponse, error)
 }
 
 // BeaconHTTPClient implements BeaconClient. It provides golang types over the basic Beacon API.
@@ -72,7 +59,11 @@ func (cl *BeaconHTTPClient) apiReq(ctx context.Context, dest any, reqPath string
 	if err != nil {
 		return fmt.Errorf("http Get failed: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusNotFound {
+		errMsg, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return fmt.Errorf("failed request with status %d: %s: %w", resp.StatusCode, string(errMsg), ethereum.NotFound)
+	} else if resp.StatusCode != http.StatusOK {
 		errMsg, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		return fmt.Errorf("failed request with status %d: %s", resp.StatusCode, string(errMsg))
@@ -111,6 +102,19 @@ func (cl *BeaconHTTPClient) BeaconGenesis(ctx context.Context) (eth.APIGenesisRe
 	return genesisResp, nil
 }
 
+func (cl *BeaconHTTPClient) BeaconBlobs(ctx context.Context, slot uint64, hashes []eth.IndexedBlobHash) (eth.APIBeaconBlobsResponse, error) {
+	reqQuery := url.Values{}
+	for _, hash := range hashes {
+		reqQuery.Add("versioned_hashes", hash.Hash.Hex())
+	}
+	reqPath := path.Join(blobsMethodPrefix, strconv.FormatUint(slot, 10))
+	var blobsResp eth.APIBeaconBlobsResponse
+	if err := cl.apiReq(ctx, &blobsResp, reqPath, reqQuery); err != nil {
+		return eth.APIBeaconBlobsResponse{}, err
+	}
+	return blobsResp, nil
+}
+
 func (cl *BeaconHTTPClient) BeaconBlobSideCars(ctx context.Context, fetchAllSidecars bool, slot uint64, hashes []eth.IndexedBlobHash) (eth.APIGetBlobSidecarsResponse, error) {
 	reqPath := path.Join(sidecarsMethodPrefix, strconv.FormatUint(slot, 10))
 	var reqQuery url.Values
@@ -123,6 +127,19 @@ func (cl *BeaconHTTPClient) BeaconBlobSideCars(ctx context.Context, fetchAllSide
 	var resp eth.APIGetBlobSidecarsResponse
 	if err := cl.apiReq(ctx, &resp, reqPath, reqQuery); err != nil {
 		return eth.APIGetBlobSidecarsResponse{}, err
+	}
+
+	indices := make(map[uint64]struct{}, len(hashes))
+	for _, h := range hashes {
+		indices[h.Index] = struct{}{}
+	}
+
+	for _, apisc := range resp.Data {
+		delete(indices, uint64(apisc.Index))
+	}
+
+	if len(indices) > 0 {
+		return eth.APIGetBlobSidecarsResponse{}, fmt.Errorf("#returned blobs(%d) != #requested blobs(%d)", len(hashes)-len(indices), len(hashes))
 	}
 	return resp, nil
 }
@@ -157,18 +174,19 @@ func (p *ClientPool[T]) MoveToNext() {
 // NewL1BeaconClient returns a client for making requests to an L1 consensus layer node.
 // Fallbacks are optional clients that will be used for fetching blobs. L1BeaconClient will rotate between
 // the `cl` and the fallbacks whenever a client runs into an error while fetching blobs.
-func NewL1BeaconClient(cl BeaconClient, cfg L1BeaconClientConfig, fallbacks ...BlobSideCarsFetcher) *L1BeaconClient {
-	cs := append([]BlobSideCarsFetcher{cl}, fallbacks...)
+func NewL1BeaconClient(cl apis.BeaconClient, cfg L1BeaconClientConfig, fallbacks ...apis.BlobSideCarsClient) *L1BeaconClient {
+	cs := append([]apis.BlobSideCarsClient{cl}, fallbacks...)
 	return &L1BeaconClient{
 		cl:   cl,
-		pool: NewClientPool[BlobSideCarsFetcher](cs...),
-		cfg:  cfg}
+		pool: NewClientPool(cs...),
+		cfg:  cfg,
+	}
 }
 
 type TimeToSlotFn func(timestamp uint64) (uint64, error)
 
-// GetTimeToSlotFn returns a function that converts a timestamp to a slot number.
-func (cl *L1BeaconClient) GetTimeToSlotFn(ctx context.Context) (TimeToSlotFn, error) {
+// getTimeToSlotFn returns a function that converts a timestamp to a slot number.
+func (cl *L1BeaconClient) getTimeToSlotFn(ctx context.Context) (TimeToSlotFn, error) {
 	cl.initLock.Lock()
 	defer cl.initLock.Unlock()
 	if cl.timeToSlotFn != nil {
@@ -199,6 +217,18 @@ func (cl *L1BeaconClient) GetTimeToSlotFn(ctx context.Context) (TimeToSlotFn, er
 	return cl.timeToSlotFn, nil
 }
 
+func (cl *L1BeaconClient) timeToSlot(ctx context.Context, timestamp uint64) (uint64, error) {
+	slotFn, err := cl.getTimeToSlotFn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("get time to slot fn: %w", err)
+	}
+	slot, err := slotFn(timestamp)
+	if err != nil {
+		return 0, fmt.Errorf("convert timestamp %d to slot number: %w", timestamp, err)
+	}
+	return slot, nil
+}
+
 func (cl *L1BeaconClient) fetchSidecars(ctx context.Context, slot uint64, hashes []eth.IndexedBlobHash) (eth.APIGetBlobSidecarsResponse, error) {
 	var errs []error
 	for i := 0; i < cl.pool.Len(); i++ {
@@ -222,18 +252,21 @@ func (cl *L1BeaconClient) GetBlobSidecars(ctx context.Context, ref eth.L1BlockRe
 	if len(hashes) == 0 {
 		return []*eth.BlobSidecar{}, nil
 	}
-	slotFn, err := cl.GetTimeToSlotFn(ctx)
+	slot, err := cl.timeToSlot(ctx, ref.Time)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get time to slot function: %w", err)
+		return nil, err
 	}
-	slot, err := slotFn(ref.Time)
+	sidecars, err := cl.getBlobSidecars(ctx, slot, hashes)
 	if err != nil {
-		return nil, fmt.Errorf("error in converting ref.Time to slot: %w", err)
+		return nil, fmt.Errorf("get blob sidecars for block %v: %w", ref, err)
 	}
+	return sidecars, nil
+}
 
+func (cl *L1BeaconClient) getBlobSidecars(ctx context.Context, slot uint64, hashes []eth.IndexedBlobHash) ([]*eth.BlobSidecar, error) {
 	resp, err := cl.fetchSidecars(ctx, slot, hashes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch blob sidecars for slot %v block %v: %w", slot, ref, err)
+		return nil, fmt.Errorf("failed to fetch blob sidecars for slot %v: %w", slot, err)
 	}
 
 	apiscs := make([]*eth.APIBlobSidecar, 0, len(hashes))
@@ -264,38 +297,95 @@ func (cl *L1BeaconClient) GetBlobSidecars(ctx context.Context, ref eth.L1BlockRe
 // blob's validity by checking its proof against the commitment, and confirming the commitment
 // hashes to the expected value. Returns error if any blob is found invalid.
 func (cl *L1BeaconClient) GetBlobs(ctx context.Context, ref eth.L1BlockRef, hashes []eth.IndexedBlobHash) ([]*eth.Blob, error) {
-	blobSidecars, err := cl.GetBlobSidecars(ctx, ref, hashes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get blob sidecars for L1BlockRef %s: %w", ref, err)
+	if len(hashes) == 0 {
+		return []*eth.Blob{}, nil
 	}
-	return blobsFromSidecars(blobSidecars, hashes)
+	slot, err := cl.timeToSlot(ctx, ref.Time)
+	if err != nil {
+		return nil, err
+	}
+	blobs, errBeaconBlobs := cl.beaconBlobs(ctx, slot, hashes)
+	if errBeaconBlobs == nil {
+		return blobs, nil
+	}
+	// If fetching from the post-Fulu /blobs/ endpoint fails, fall back to /blob_sidecars/.
+	errBeaconBlobs = fmt.Errorf("failed to get blobs: %w", errBeaconBlobs)
+	blobSidecars, err := cl.getBlobSidecars(ctx, slot, hashes)
+	if err != nil {
+		return nil, fmt.Errorf("%w; failed to get blob sidecars for L1BlockRef %s after falling back: %w", errBeaconBlobs, ref, err)
+	}
+	blobs, err = blobsFromSidecars(blobSidecars, hashes)
+	if err != nil {
+		return nil, fmt.Errorf("%w; failed to get blobs from sidecars for L1BlockRef %s after falling back: %w", errBeaconBlobs, ref, err)
+	}
+	return blobs, nil
 }
 
+func (cl *L1BeaconClient) beaconBlobs(ctx context.Context, slot uint64, hashes []eth.IndexedBlobHash) ([]*eth.Blob, error) {
+	resp, err := cl.cl.BeaconBlobs(ctx, slot, hashes)
+	if err != nil {
+		return nil, fmt.Errorf("get blobs from beacon client: %w", err)
+	}
+	if len(resp.Data) != len(hashes) {
+		return nil, fmt.Errorf("expected %d blobs but got %d", len(hashes), len(resp.Data))
+	}
+	// This function guarantees that the returned blobs will be ordered according to the provided
+	// hashes. The BeaconBlobs call above has a different ordering. From the getBlobs spec:
+	//   The returned blobs are ordered based on their kzg commitments in the block.
+	// https://ethereum.github.io/beacon-APIs/beacon-node-oapi.yaml
+	//
+	// This loop
+	//   1. verifies the integrity of each blob, and
+	//   2. rearranges the blobs to match the order of the provided hashes.
+	blobs := make([]*eth.Blob, len(hashes))
+	for _, blob := range resp.Data {
+		commitment, err := blob.ComputeKZGCommitment()
+		if err != nil {
+			return nil, fmt.Errorf("compute blob kzg commitment: %w", err)
+		}
+		got := eth.KZGToVersionedHash(commitment)
+		idx := slices.IndexFunc(hashes, func(indexedHash eth.IndexedBlobHash) bool {
+			return got == indexedHash.Hash
+		})
+		if idx == -1 {
+			return nil, fmt.Errorf("received a blob hash that does not match any expected hash: %s", got)
+		}
+		blobs[idx] = blob
+	}
+	return blobs, nil
+}
+
+// blobsFromSidecars pulls the blobs from the sidecars and verifies them against the supplied hashes.
 func blobsFromSidecars(blobSidecars []*eth.BlobSidecar, hashes []eth.IndexedBlobHash) ([]*eth.Blob, error) {
 	if len(blobSidecars) != len(hashes) {
 		return nil, fmt.Errorf("number of hashes and blobSidecars mismatch, %d != %d", len(hashes), len(blobSidecars))
 	}
-
 	out := make([]*eth.Blob, len(hashes))
 	for i, ih := range hashes {
 		sidecar := blobSidecars[i]
 		if sidx := uint64(sidecar.Index); sidx != ih.Index {
 			return nil, fmt.Errorf("expected sidecars to be ordered by hashes, but got %d != %d", sidx, ih.Index)
 		}
-
-		// make sure the blob's kzg commitment hashes to the expected value
-		hash := eth.KZGToVersionedHash(kzg4844.Commitment(sidecar.KZGCommitment))
-		if hash != ih.Hash {
-			return nil, fmt.Errorf("expected hash %s for blob at index %d but got %s", ih.Hash, ih.Index, hash)
-		}
-
-		// confirm blob data is valid by verifying its proof against the commitment
-		if err := eth.VerifyBlobProof(&sidecar.Blob, kzg4844.Commitment(sidecar.KZGCommitment), kzg4844.Proof(sidecar.KZGProof)); err != nil {
-			return nil, fmt.Errorf("blob at index %d failed verification: %w", i, err)
+		if err := verifyBlob(&sidecar.Blob, ih.Hash); err != nil {
+			return nil, fmt.Errorf("blob %d failed verification: %w", i, err)
 		}
 		out[i] = &sidecar.Blob
 	}
 	return out, nil
+}
+
+// verifyBlob verifies that the blob data corresponds to the provided commitment.
+// It recomputes the commitment from the blob data and checks it matches the expected commitment hash.
+func verifyBlob(blob *eth.Blob, expectedCommitmentHash common.Hash) error {
+	recomputedCommitment, err := blob.ComputeKZGCommitment()
+	if err != nil {
+		return fmt.Errorf("cannot compute KZG commitment for blob: %w", err)
+	}
+	recomputedCommitmentHash := eth.KZGToVersionedHash(recomputedCommitment)
+	if recomputedCommitmentHash != expectedCommitmentHash {
+		return fmt.Errorf("recomputed commitment %s does not match expected commitment %s", recomputedCommitmentHash, expectedCommitmentHash)
+	}
+	return nil
 }
 
 // GetVersion fetches the version of the Beacon-node.

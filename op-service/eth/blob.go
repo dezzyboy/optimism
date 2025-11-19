@@ -4,10 +4,13 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -58,26 +61,20 @@ func (b *Blob) TerminalString() string {
 }
 
 func (b *Blob) ComputeKZGCommitment() (kzg4844.Commitment, error) {
-	return kzg4844.BlobToCommitment(*b.KZGBlob())
+	return kzg4844.BlobToCommitment(b.KZGBlob())
 }
 
 // KZGToVersionedHash computes the "blob hash" (a.k.a. versioned-hash) of a blob-commitment, as used in a blob-tx.
 // We implement it here because it is unfortunately not (currently) exposed by geth.
 func KZGToVersionedHash(commitment kzg4844.Commitment) (out common.Hash) {
-	// EIP-4844 spec:
-	//	def kzg_to_versioned_hash(commitment: KZGCommitment) -> VersionedHash:
-	//		return VERSIONED_HASH_VERSION_KZG + sha256(commitment)[1:]
-	h := sha256.New()
-	h.Write(commitment[:])
-	_ = h.Sum(out[:0])
-	out[0] = params.BlobTxHashVersion
-	return out
+	hasher := sha256.New()
+	return kzg4844.CalcBlobHashV1(hasher, &commitment)
 }
 
 // VerifyBlobProof verifies that the given blob and proof corresponds to the given commitment,
 // returning error if the verification fails.
 func VerifyBlobProof(blob *Blob, commitment kzg4844.Commitment, proof kzg4844.Proof) error {
-	return kzg4844.VerifyBlobProof(*blob.KZGBlob(), commitment, proof)
+	return kzg4844.VerifyBlobProof(blob.KZGBlob(), commitment, proof)
 }
 
 // FromData encodes the given input data into this blob. The encoding scheme is as follows:
@@ -285,3 +282,24 @@ func (b *Blob) Clear() {
 		b[i] = 0
 	}
 }
+
+// CalcBlobFeeCancun calculates the blob fee for the given header using
+// the default blob schedule for Cancun. This function only exists
+// to support the L1 Pectra Blob Schedule Fix. The geth function
+// eip4844.CalcBlobFee should be used instead.
+func CalcBlobFeeCancun(excessBlobGas uint64) *big.Int {
+	// Dummy Cancun header for calculation.
+	cancunHeader := &types.Header{
+		ExcessBlobGas: &excessBlobGas,
+	}
+
+	// Dummy Cancun chain config for calculation.
+	dummyChainCfg := &params.ChainConfig{
+		LondonBlock:        common.Big0,
+		CancunTime:         ptr(uint64(0)),
+		BlobScheduleConfig: params.DefaultBlobSchedule,
+	}
+	return eip4844.CalcBlobFee(dummyChainCfg, cancunHeader)
+}
+
+func ptr[T any](t T) *T { return &t }

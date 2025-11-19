@@ -18,6 +18,7 @@ var (
 	// ABI encoding helpers
 	dynBytes, _ = abi.NewType("bytes", "", nil)
 	address, _  = abi.NewType("address", "", nil)
+	uint16T, _  = abi.NewType("uint16", "", nil)
 	uint256T, _ = abi.NewType("uint256", "", nil)
 	addressArgs = abi.Arguments{
 		{Type: address},
@@ -29,9 +30,15 @@ var (
 		{Type: uint256T},
 		{Type: uint256T},
 	}
+	oneUint16 = abi.Arguments{
+		{Type: uint16T},
+	}
 	oneUint256 = abi.Arguments{
 		{Type: uint256T},
 	}
+	eip1559Params     = []byte{0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8}
+	operatorFeeParams = []byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5, 0x0, 0x0, 0x0, 0x0, 0x0, 0x7, 0xd, 0x8}
+	minBaseFee        = uint64(1e9)
 )
 
 // TestProcessSystemConfigUpdateLogEvent tests the parsing of an event and mutating the
@@ -52,7 +59,7 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 		{
 			// The log data is ignored by consensus and no modifications to the
 			// system config occur.
-			name: "SystemConfigUpdateUnsafeBlockSigner",
+			name: "UnsafeBlockSigner",
 			log: &types.Log{
 				Topics: []common.Hash{
 					ConfigUpdateEventABIHash,
@@ -72,7 +79,7 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 		},
 		{
 			// The batcher address should be updated.
-			name: "SystemConfigUpdateBatcher",
+			name: "Batcher",
 			log: &types.Log{
 				Topics: []common.Hash{
 					ConfigUpdateEventABIHash,
@@ -96,12 +103,12 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 		},
 		{
 			// The overhead and the scalar should be updated.
-			name: "SystemConfigUpdateGasConfig",
+			name: "GasConfig",
 			log: &types.Log{
 				Topics: []common.Hash{
 					ConfigUpdateEventABIHash,
 					ConfigUpdateEventVersion0,
-					SystemConfigUpdateGasConfig,
+					SystemConfigUpdateFeeScalars,
 				},
 			},
 			hook: func(t *testing.T, log *types.Log) *types.Log {
@@ -122,7 +129,7 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 		},
 		{
 			// The gas limit should be updated.
-			name: "SystemConfigUpdateGasLimit",
+			name: "GasLimit",
 			log: &types.Log{
 				Topics: []common.Hash{
 					ConfigUpdateEventABIHash,
@@ -146,12 +153,12 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 		},
 		{
 			// The ecotone scalars should be updated
-			name: "SystemConfigUpdateGasConfigEcotone",
+			name: "GasConfigEcotone",
 			log: &types.Log{
 				Topics: []common.Hash{
 					ConfigUpdateEventABIHash,
 					ConfigUpdateEventVersion0,
-					SystemConfigUpdateGasConfig,
+					SystemConfigUpdateFeeScalars,
 				},
 			},
 			hook: func(t *testing.T, log *types.Log) *types.Log {
@@ -173,7 +180,7 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 			l1Time:      200,
 		},
 		{
-			name: "SystemConfigOneTopic",
+			name: "OneTopic",
 			log: &types.Log{
 				Topics: []common.Hash{
 					ConfigUpdateEventABIHash,
@@ -185,10 +192,97 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 			config: eth.SystemConfig{},
 			err:    true,
 		},
+		{
+			name: "EIP1559Params",
+			log: &types.Log{
+				Topics: []common.Hash{
+					ConfigUpdateEventABIHash,
+					ConfigUpdateEventVersion0,
+					SystemConfigUpdateEIP1559Params,
+				},
+			},
+			hook: func(t *testing.T, log *types.Log) *types.Log {
+				numberData, err := oneUint256.Pack(new(big.Int).SetBytes(eip1559Params))
+				require.NoError(t, err)
+				data, err := bytesArgs.Pack(numberData)
+				require.NoError(t, err)
+				log.Data = data
+				return log
+			},
+			config: eth.SystemConfig{
+				EIP1559Params: eth.Bytes8(eip1559Params),
+			},
+			err: false,
+		},
+		{
+			name: "OperatorFeeParams",
+			log: &types.Log{
+				Topics: []common.Hash{
+					ConfigUpdateEventABIHash,
+					ConfigUpdateEventVersion0,
+					SystemConfigUpdateOperatorFeeParams,
+				},
+			},
+			hook: func(t *testing.T, log *types.Log) *types.Log {
+				numberData, err := oneUint256.Pack(new(big.Int).SetBytes(operatorFeeParams))
+				require.NoError(t, err)
+				data, err := bytesArgs.Pack(numberData)
+				require.NoError(t, err)
+				log.Data = data
+				return log
+			},
+			config: eth.SystemConfig{
+				OperatorFeeParams: eth.Bytes32(operatorFeeParams),
+			},
+			err: false,
+		},
+		{
+			name: "UpdateMinBaseFee",
+			log: &types.Log{
+				Topics: []common.Hash{
+					ConfigUpdateEventABIHash,
+					ConfigUpdateEventVersion0,
+					SystemConfigUpdateMinBaseFee,
+				},
+			},
+			hook: func(t *testing.T, log *types.Log) *types.Log {
+				numberData, err := oneUint256.Pack(new(big.Int).SetUint64(minBaseFee))
+				require.NoError(t, err)
+				data, err := bytesArgs.Pack(numberData)
+				require.NoError(t, err)
+				log.Data = data
+				return log
+			},
+			config: eth.SystemConfig{
+				MinBaseFee: minBaseFee,
+			},
+			err: false,
+		},
+		{
+			name: "DAFootprintGasScalar",
+			log: &types.Log{
+				Topics: []common.Hash{
+					ConfigUpdateEventABIHash,
+					ConfigUpdateEventVersion0,
+					SystemConfigUpdateDAFootprintGasScalar,
+				},
+			},
+			hook: func(t *testing.T, log *types.Log) *types.Log {
+				numberData, err := oneUint16.Pack(uint16(100))
+				require.NoError(t, err)
+				data, err := bytesArgs.Pack(numberData)
+				require.NoError(t, err)
+				log.Data = data
+				return log
+			},
+			config: eth.SystemConfig{
+				DAFootprintGasScalar: 100,
+			},
+			err: false,
+		},
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			config := eth.SystemConfig{}
 			rollupCfg := rollup.Config{EcotoneTime: test.ecotoneTime}

@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import { Predeploys } from "src/libraries/Predeploys.sol";
+// Contracts
+import { ProxyAdminOwnedBase } from "src/L1/ProxyAdminOwnedBase.sol";
+import { ReinitializableBase } from "src/universal/ReinitializableBase.sol";
 import { StandardBridge } from "src/universal/StandardBridge.sol";
-import { ISemver } from "src/universal/ISemver.sol";
-import { CrossDomainMessenger } from "src/universal/CrossDomainMessenger.sol";
-import { SuperchainConfig } from "src/L1/SuperchainConfig.sol";
-import { Constants } from "src/libraries/Constants.sol";
 
-/// @custom:proxied
+// Libraries
+import { Predeploys } from "src/libraries/Predeploys.sol";
+
+// Interfaces
+import { ISemver } from "interfaces/universal/ISemver.sol";
+import { ICrossDomainMessenger } from "interfaces/universal/ICrossDomainMessenger.sol";
+import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
+
+/// @custom:proxied true
 /// @title L1StandardBridge
 /// @notice The L1StandardBridge is responsible for transfering ETH and ERC20 tokens between L1 and
 ///         L2. In the case that an ERC20 token is native to L1, it will be escrowed within this
@@ -18,7 +25,7 @@ import { Constants } from "src/libraries/Constants.sol";
 ///         NOTE: this contract is not intended to support all variations of ERC20 tokens. Examples
 ///         of some token types that may not be properly supported by this contract include, but are
 ///         not limited to: tokens with transfer fees, rebasing tokens, and tokens with blocklists.
-contract L1StandardBridge is StandardBridge, ISemver {
+contract L1StandardBridge is StandardBridge, ProxyAdminOwnedBase, ReinitializableBase, ISemver {
     /// @custom:legacy
     /// @notice Emitted whenever a deposit of ETH from L1 into L2 is initiated.
     /// @param from      Address of the depositor.
@@ -70,22 +77,42 @@ contract L1StandardBridge is StandardBridge, ISemver {
     );
 
     /// @notice Semantic version.
-    /// @custom:semver 2.1.0
-    string public constant version = "2.1.0";
+    /// @custom:semver 2.8.0
+    string public constant version = "2.8.0";
 
-    /// @notice Address of the SuperchainConfig contract.
-    SuperchainConfig public superchainConfig;
+    /// @custom:legacy
+    /// @custom:spacer superchainConfig
+    /// @notice Spacer taking up the legacy `superchainConfig` slot.
+    address private spacer_50_0_20;
+
+    /// @custom:legacy
+    /// @custom:spacer systemConfig
+    /// @notice Spacer taking up the legacy `systemConfig` slot.
+    address private spacer_51_0_20;
+
+    /// @notice Address of the SystemConfig contract.
+    ISystemConfig public systemConfig;
 
     /// @notice Constructs the L1StandardBridge contract.
-    constructor() StandardBridge() {
-        initialize({ _messenger: CrossDomainMessenger(address(0)), _superchainConfig: SuperchainConfig(address(0)) });
+    constructor() StandardBridge() ReinitializableBase(3) {
+        _disableInitializers();
     }
 
     /// @notice Initializer.
     /// @param _messenger        Contract for the CrossDomainMessenger on this network.
-    /// @param _superchainConfig Contract for the SuperchainConfig on this network.
-    function initialize(CrossDomainMessenger _messenger, SuperchainConfig _superchainConfig) public initializer {
-        superchainConfig = _superchainConfig;
+    /// @param _systemConfig Contract for the SystemConfig on this network.
+    function initialize(
+        ICrossDomainMessenger _messenger,
+        ISystemConfig _systemConfig
+    )
+        external
+        reinitializer(initVersion())
+    {
+        // Initialization transactions must come from the ProxyAdmin or its owner.
+        _assertOnlyProxyAdminOrProxyAdminOwner();
+
+        // Now perform initialization logic.
+        systemConfig = _systemConfig;
         __StandardBridge_init({
             _messenger: _messenger,
             _otherBridge: StandardBridge(payable(Predeploys.L2_STANDARD_BRIDGE))
@@ -94,7 +121,13 @@ contract L1StandardBridge is StandardBridge, ISemver {
 
     /// @inheritdoc StandardBridge
     function paused() public view override returns (bool) {
-        return superchainConfig.paused();
+        return systemConfig.paused();
+    }
+
+    /// @notice Returns the SuperchainConfig contract.
+    /// @return ISuperchainConfig The SuperchainConfig contract.
+    function superchainConfig() public view returns (ISuperchainConfig) {
+        return systemConfig.superchainConfig();
     }
 
     /// @notice Allows EOAs to bridge ETH by sending directly to the bridge.

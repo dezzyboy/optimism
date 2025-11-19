@@ -8,8 +8,9 @@ import (
 
 	"github.com/urfave/cli/v2"
 
+	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-batcher/compressor"
-	plasma "github.com/ethereum-optimism/optimism/op-plasma"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	openum "github.com/ethereum-optimism/optimism/op-service/enum"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
@@ -19,7 +20,9 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 )
 
-const EnvVarPrefix = "OP_BATCHER"
+const (
+	EnvVarPrefix = "OP_BATCHER"
+)
 
 func prefixEnvVars(name string) []string {
 	return opservice.PrefixEnvVar(EnvVarPrefix, name)
@@ -32,12 +35,12 @@ var (
 		Usage:   "HTTP provider URL for L1",
 		EnvVars: prefixEnvVars("L1_ETH_RPC"),
 	}
-	L2EthRpcFlag = &cli.StringFlag{
+	L2EthRpcFlag = &cli.StringSliceFlag{
 		Name:    "l2-eth-rpc",
 		Usage:   "HTTP provider URL for L2 execution engine. A comma-separated list enables the active L2 endpoint provider. Such a list needs to match the number of rollup-rpcs provided.",
 		EnvVars: prefixEnvVars("L2_ETH_RPC"),
 	}
-	RollupRpcFlag = &cli.StringFlag{
+	RollupRpcFlag = &cli.StringSliceFlag{
 		Name:    "rollup-rpc",
 		Usage:   "HTTP provider URL for Rollup node. A comma-separated list enables the active L2 endpoint provider. Such a list needs to match the number of l2-eth-rpcs provided.",
 		EnvVars: prefixEnvVars("ROLLUP_RPC"),
@@ -75,6 +78,11 @@ var (
 		Value:   120_000, // will be overwritten to max for blob da-type
 		EnvVars: prefixEnvVars("MAX_L1_TX_SIZE_BYTES"),
 	}
+	MaxBlocksPerSpanBatch = &cli.IntFlag{
+		Name:    "max-blocks-per-span-batch",
+		Usage:   "Maximum number of blocks to add to a span batch. Default is 0 - no maximum.",
+		EnvVars: prefixEnvVars("MAX_BLOCKS_PER_SPAN_BATCH"),
+	}
 	TargetNumFramesFlag = &cli.IntFlag{
 		Name:    "target-num-frames",
 		Usage:   "The target number of frames to create per channel. Controls number of blobs per blob tx, if using Blob DA.",
@@ -98,6 +106,15 @@ var (
 			}
 			return nil
 		},
+	}
+	CompressionAlgoFlag = &cli.GenericFlag{
+		Name:    "compression-algo",
+		Usage:   "The compression algorithm to use. Valid options: " + openum.EnumString(derive.CompressionAlgos),
+		EnvVars: prefixEnvVars("COMPRESSION_ALGO"),
+		Value: func() *derive.CompressionAlgo {
+			out := derive.Zlib
+			return &out
+		}(),
 	}
 	StoppedFlag = &cli.BoolFlag{
 		Name:    "stopped",
@@ -123,10 +140,25 @@ var (
 	}
 	ActiveSequencerCheckDurationFlag = &cli.DurationFlag{
 		Name:    "active-sequencer-check-duration",
-		Usage:   "The duration between checks to determine the active sequencer endpoint. ",
-		Value:   2 * time.Minute,
+		Usage:   "The duration between checks to determine the active sequencer endpoint.",
+		Value:   5 * time.Second,
 		EnvVars: prefixEnvVars("ACTIVE_SEQUENCER_CHECK_DURATION"),
 	}
+	CheckRecentTxsDepthFlag = &cli.IntFlag{
+		Name: "check-recent-txs-depth",
+		Usage: "Indicates how many blocks back the batcher should look during startup for a recent batch tx on L1. This can " +
+			"speed up waiting for node sync. It should be set to the verifier confirmation depth of the sequencer (e.g. 4).",
+		Value:   0,
+		EnvVars: prefixEnvVars("CHECK_RECENT_TXS_DEPTH"),
+	}
+	WaitNodeSyncFlag = &cli.BoolFlag{
+		Name: "wait-node-sync",
+		Usage: "Indicates if, during startup, the batcher should wait for a recent batcher tx on L1 to " +
+			"finalize (via more block confirmations). This should help avoid duplicate batcher txs.",
+		Value:   false,
+		EnvVars: prefixEnvVars("WAIT_NODE_SYNC"),
+	}
+
 	// Legacy Flags
 	SequencerHDPathFlag = txmgr.SequencerHDPathFlag
 )
@@ -138,11 +170,14 @@ var requiredFlags = []cli.Flag{
 }
 
 var optionalFlags = []cli.Flag{
+	WaitNodeSyncFlag,
+	CheckRecentTxsDepthFlag,
 	SubSafetyMarginFlag,
 	PollIntervalFlag,
 	MaxPendingTransactionsFlag,
 	MaxChannelDurationFlag,
 	MaxL1TxSizeBytesFlag,
+	MaxBlocksPerSpanBatch,
 	TargetNumFramesFlag,
 	ApproxComprRatioFlag,
 	CompressorFlag,
@@ -151,15 +186,17 @@ var optionalFlags = []cli.Flag{
 	BatchTypeFlag,
 	DataAvailabilityTypeFlag,
 	ActiveSequencerCheckDurationFlag,
+	CompressionAlgoFlag,
 }
 
 func init() {
+	optionalFlags = append(optionalFlags, ThrottleFlags...)
 	optionalFlags = append(optionalFlags, oprpc.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, oplog.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, opmetrics.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, oppprof.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, txmgr.CLIFlags(EnvVarPrefix)...)
-	optionalFlags = append(optionalFlags, plasma.CLIFlags(EnvVarPrefix, "")...)
+	optionalFlags = append(optionalFlags, altda.CLIFlags(EnvVarPrefix, "")...)
 
 	Flags = append(requiredFlags, optionalFlags...)
 }

@@ -83,12 +83,21 @@ func TestWithdrawalNetworkInlineJSON(t *testing.T) {
 		BaseFeeVaultWithdrawalNetwork      WithdrawalNetwork `json:"baseFeeVaultWithdrawalNetwork"`
 		L1FeeVaultWithdrawalNetwork        WithdrawalNetwork `json:"l1FeeVaultWithdrawalNetwork"`
 		SequencerFeeVaultWithdrawalNetwork WithdrawalNetwork `json:"sequencerFeeVaultWithdrawalNetwork"`
+		OperatorFeeVaultWithdrawalNetwork  WithdrawalNetwork `json:"operatorFeeVaultWithdrawalNetwork"`
 	}
 
 	jsonString := `{
 		"baseFeeVaultWithdrawalNetwork": "remote",
 		"l1FeeVaultWithdrawalNetwork": "local",
-		"sequencerFeeVaultWithdrawalNetwork": "local"
+		"sequencerFeeVaultWithdrawalNetwork": "local",
+		"operatorFeeVaultWithdrawalNetwork": "local"
+	}`
+
+	intJsonString := `{
+		"baseFeeVaultWithdrawalNetwork": 0,
+		"l1FeeVaultWithdrawalNetwork": 1,
+		"sequencerFeeVaultWithdrawalNetwork": 1,
+		"operatorFeeVaultWithdrawalNetwork": 1
 	}`
 
 	t.Run("StringMarshaling", func(t *testing.T) {
@@ -98,18 +107,14 @@ func TestWithdrawalNetworkInlineJSON(t *testing.T) {
 		require.Equal(t, WithdrawalNetwork("remote"), decoded.BaseFeeVaultWithdrawalNetwork)
 		require.Equal(t, WithdrawalNetwork("local"), decoded.L1FeeVaultWithdrawalNetwork)
 		require.Equal(t, WithdrawalNetwork("local"), decoded.SequencerFeeVaultWithdrawalNetwork)
+		require.Equal(t, WithdrawalNetwork("local"), decoded.OperatorFeeVaultWithdrawalNetwork)
 
 		encoded, err := json.Marshal(decoded)
 		require.NoError(t, err)
-		require.JSONEq(t, jsonString, string(encoded))
+		require.JSONEq(t, intJsonString, string(encoded))
 	})
 
 	t.Run("IntMarshaling", func(t *testing.T) {
-		intJsonString := `{
-			"baseFeeVaultWithdrawalNetwork": 0,
-			"l1FeeVaultWithdrawalNetwork": 1,
-			"sequencerFeeVaultWithdrawalNetwork": 1
-		}`
 
 		decoded := new(tempNetworks)
 		require.NoError(t, json.Unmarshal([]byte(intJsonString), decoded))
@@ -117,9 +122,31 @@ func TestWithdrawalNetworkInlineJSON(t *testing.T) {
 		require.Equal(t, WithdrawalNetwork("remote"), decoded.BaseFeeVaultWithdrawalNetwork)
 		require.Equal(t, WithdrawalNetwork("local"), decoded.L1FeeVaultWithdrawalNetwork)
 		require.Equal(t, WithdrawalNetwork("local"), decoded.SequencerFeeVaultWithdrawalNetwork)
+		require.Equal(t, WithdrawalNetwork("local"), decoded.OperatorFeeVaultWithdrawalNetwork)
 
 		encoded, err := json.Marshal(decoded)
 		require.NoError(t, err)
-		require.JSONEq(t, jsonString, string(encoded))
+		require.JSONEq(t, intJsonString, string(encoded))
 	})
+}
+
+func TestWithdrawalNetworkMarshalJSON(t *testing.T) {
+	type test struct {
+		Network WithdrawalNetwork
+	}
+
+	tests := []struct {
+		network WithdrawalNetwork
+		exp     string
+	}{
+		{WithdrawalNetwork("local"), `{"Network":1}`},
+		{WithdrawalNetwork("remote"), `{"Network":0}`},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.network), func(t *testing.T) {
+			data, err := json.Marshal(test{tt.network})
+			require.NoError(t, err)
+			require.JSONEq(t, tt.exp, string(data))
+		})
+	}
 }

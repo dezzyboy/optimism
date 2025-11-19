@@ -5,16 +5,6 @@
         "internalType": "uint256",
         "name": "_proofMaturityDelaySeconds",
         "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_disputeGameFinalityDelaySeconds",
-        "type": "uint256"
-      },
-      {
-        "internalType": "GameType",
-        "name": "_initialRespectedGameType",
-        "type": "uint32"
       }
     ],
     "stateMutability": "nonpayable",
@@ -26,41 +16,15 @@
   },
   {
     "inputs": [],
-    "name": "GUARDIAN",
+    "name": "anchorStateRegistry",
     "outputs": [
       {
-        "internalType": "address",
+        "internalType": "contract IAnchorStateRegistry",
         "name": "",
         "type": "address"
       }
     ],
     "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "SYSTEM_CONFIG",
-    "outputs": [
-      {
-        "internalType": "contract SystemConfig",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "contract IDisputeGame",
-        "name": "_disputeGame",
-        "type": "address"
-      }
-    ],
-    "name": "blacklistDisputeGame",
-    "outputs": [],
-    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -118,7 +82,7 @@
     "inputs": [
       {
         "internalType": "contract IDisputeGame",
-        "name": "",
+        "name": "_disputeGame",
         "type": "address"
       }
     ],
@@ -138,7 +102,7 @@
     "name": "disputeGameFactory",
     "outputs": [
       {
-        "internalType": "contract DisputeGameFactory",
+        "internalType": "contract IDisputeGameFactory",
         "name": "",
         "type": "address"
       }
@@ -164,6 +128,19 @@
     "name": "donateETH",
     "outputs": [],
     "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "ethLockbox",
+    "outputs": [
+      {
+        "internalType": "contract IETHLockbox",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -294,20 +271,28 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "initVersion",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
-        "internalType": "contract DisputeGameFactory",
-        "name": "_disputeGameFactory",
-        "type": "address"
-      },
-      {
-        "internalType": "contract SystemConfig",
+        "internalType": "contract ISystemConfig",
         "name": "_systemConfig",
         "type": "address"
       },
       {
-        "internalType": "contract SuperchainConfig",
-        "name": "_superchainConfig",
+        "internalType": "contract IAnchorStateRegistry",
+        "name": "_anchorStateRegistry",
         "type": "address"
       }
     ],
@@ -553,6 +538,32 @@
   },
   {
     "inputs": [],
+    "name": "proxyAdmin",
+    "outputs": [
+      {
+        "internalType": "contract IProxyAdmin",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "proxyAdminOwner",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "respectedGameType",
     "outputs": [
       {
@@ -578,24 +589,11 @@
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "GameType",
-        "name": "_gameType",
-        "type": "uint32"
-      }
-    ],
-    "name": "setRespectedGameType",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "superchainConfig",
     "outputs": [
       {
-        "internalType": "contract SuperchainConfig",
+        "internalType": "contract ISuperchainConfig",
         "name": "",
         "type": "address"
       }
@@ -608,7 +606,7 @@
     "name": "systemConfig",
     "outputs": [
       {
-        "internalType": "contract SystemConfig",
+        "internalType": "contract ISystemConfig",
         "name": "",
         "type": "address"
       }
@@ -626,7 +624,7 @@
         "type": "string"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -716,5 +714,174 @@
     ],
     "name": "WithdrawalProven",
     "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "withdrawalHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "proofSubmitter",
+        "type": "address"
+      }
+    ],
+    "name": "WithdrawalProvenExtension1",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "ContentLengthMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "EmptyItem",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidDataRemainder",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidHeader",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_AlreadyFinalized",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_BadTarget",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_CallPaused",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_CalldataTooLarge",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_GasEstimation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_GasLimitTooLow",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_ImproperDisputeGame",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_InvalidDisputeGame",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_InvalidLockboxState",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_InvalidMerkleProof",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_InvalidOutputRootProof",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_InvalidProofTimestamp",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_InvalidRootClaim",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_NoReentrancy",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_ProofNotOldEnough",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_Unproven",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OutOfGas",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ProxyAdminOwnedBase_NotProxyAdmin",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ProxyAdminOwnedBase_NotProxyAdminOrProxyAdminOwner",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ProxyAdminOwnedBase_NotProxyAdminOwner",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ProxyAdminOwnedBase_NotResolvedDelegateProxy",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ProxyAdminOwnedBase_NotSharedProxyAdminOwner",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ProxyAdminOwnedBase_ProxyAdminNotFound",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ReinitializableBase_ZeroInitVersion",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "UnexpectedList",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "UnexpectedString",
+    "type": "error"
   }
 ]

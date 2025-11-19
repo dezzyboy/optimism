@@ -1,25 +1,38 @@
 package log
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/urfave/cli/v2"
-	"golang.org/x/exp/slog"
 	"golang.org/x/term"
 
 	"github.com/ethereum/go-ethereum/log"
 
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
+	"github.com/ethereum-optimism/optimism/op-service/cliiface"
+	"github.com/ethereum-optimism/optimism/op-service/log/logfilter"
 )
 
 const (
 	LevelFlagName  = "log.level"
 	FormatFlagName = "log.format"
 	ColorFlagName  = "log.color"
+	PidFlagName    = "log.pid"
+)
+
+// These flag configurations are used during testing, where level is set to trace.
+var (
+	flLevel  = flag.String(LevelFlagName, "trace", "Lowest log level that will be output")
+	flFormat = flag.String(FormatFlagName, "text", "Log format: text|terminal|logfmt|logfmtms|json|jsonms|json-pretty")
+	flColor  = flag.Bool(ColorFlagName, false, "Color the log output if in terminal mode: true|false")
+	flPID    = flag.Bool(PidFlagName, false, "Show pid in the log")
 )
 
 func CLIFlags(envPrefix string) []cli.Flag {
@@ -40,7 +53,7 @@ func CLIFlagsWithCategory(envPrefix string, category string) []cli.Flag {
 		},
 		&cli.GenericFlag{
 			Name:     FormatFlagName,
-			Usage:    "Format the log output. Supported formats: 'text', 'terminal', 'logfmt', 'json', 'json-pretty',",
+			Usage:    fmt.Sprintf("Format the log output. Supported formats: %s", SupportedFormatsString()),
 			Value:    NewFormatFlagValue(FormatText),
 			EnvVars:  opservice.PrefixEnvVar(envPrefix, "LOG_FORMAT"),
 			Category: category,
@@ -49,6 +62,12 @@ func CLIFlagsWithCategory(envPrefix string, category string) []cli.Flag {
 			Name:     ColorFlagName,
 			Usage:    "Color the log output if in terminal mode",
 			EnvVars:  opservice.PrefixEnvVar(envPrefix, "LOG_COLOR"),
+			Category: category,
+		},
+		&cli.BoolFlag{
+			Name:     PidFlagName,
+			Usage:    "Show pid in the log",
+			EnvVars:  opservice.PrefixEnvVar(envPrefix, "LOG_PID"),
 			Category: category,
 		},
 	}
@@ -120,27 +139,54 @@ const (
 	FormatText     FormatType = "text"
 	FormatTerminal FormatType = "terminal"
 	FormatLogFmt   FormatType = "logfmt"
+	FormatLogFmtMs FormatType = "logfmtms"
 	FormatJSON     FormatType = "json"
+	FormatJSONMs   FormatType = "jsonms"
 )
+
+// All supported format types in a slice for iteration
+var formatTypes = []FormatType{
+	FormatText,
+	FormatTerminal,
+	FormatLogFmt,
+	FormatLogFmtMs,
+	FormatJSON,
+	FormatJSONMs,
+}
+
+// SupportedFormatsString returns a comma-delimited string of supported formats,
+func SupportedFormatsString() string {
+	names := make([]string, 0, len(formatTypes))
+	for _, f := range formatTypes {
+		names = append(names, f.String())
+	}
+	return strings.Join(names, ", ")
+}
 
 // FormatHandler returns the correct slog handler factory for the provided format.
 func FormatHandler(ft FormatType, color bool) func(io.Writer) slog.Handler {
 	termColorHandler := func(w io.Writer) slog.Handler {
 		return log.NewTerminalHandler(w, color)
 	}
+	logfmtHandler := func(w io.Writer) slog.Handler { return log.LogfmtHandlerWithLevel(w, log.LevelTrace) }
+	logfmtMsHandler := func(w io.Writer) slog.Handler { return LogfmtMsHandlerWithLevel(w, log.LevelTrace) }
 	switch ft {
 	case FormatJSON:
 		return log.JSONHandler
+	case FormatJSONMs:
+		return JSONMsHandler
 	case FormatText:
-		if term.IsTerminal(int(os.Stdout.Fd())) {
+		if color {
 			return termColorHandler
 		} else {
-			return log.LogfmtHandler
+			return logfmtHandler
 		}
 	case FormatTerminal:
 		return termColorHandler
 	case FormatLogFmt:
-		return log.LogfmtHandler
+		return logfmtHandler
+	case FormatLogFmtMs:
+		return logfmtMsHandler
 	default:
 		panic(fmt.Errorf("failed to create slog.Handler factory for format-type=%q and color=%v", ft, color))
 	}
@@ -159,7 +205,7 @@ func NewFormatFlagValue(fmtType FormatType) *FormatFlagValue {
 
 func (fv *FormatFlagValue) Set(value string) error {
 	switch FormatType(value) {
-	case FormatText, FormatTerminal, FormatLogFmt, FormatJSON:
+	case FormatText, FormatTerminal, FormatLogFmt, FormatLogFmtMs, FormatJSON, FormatJSONMs:
 		*fv = FormatFlagValue(value)
 		return nil
 	default:
@@ -186,6 +232,7 @@ type CLIConfig struct {
 	Level  slog.Level
 	Color  bool
 	Format FormatType
+	Pid    bool
 }
 
 // AppOut returns an io.Writer to write app output to, like logs.
@@ -207,7 +254,11 @@ func NewLogHandler(wr io.Writer, cfg CLIConfig) slog.Handler {
 // The log handler of the logger is a LvlSetter, i.e. the log level can be changed as needed.
 func NewLogger(wr io.Writer, cfg CLIConfig) log.Logger {
 	h := NewLogHandler(wr, cfg)
-	return log.NewLogger(h)
+	l := log.NewLogger(h)
+	if cfg.Pid {
+		l = l.With("pid", os.Getpid())
+	}
+	return l
 }
 
 // SetGlobalLogHandler sets the log handles as the handler of the global default logger.
@@ -216,7 +267,10 @@ func NewLogger(wr io.Writer, cfg CLIConfig) log.Logger {
 // Geth and other components may use the global logger however,
 // and it is thus recommended to set the global log handler to catch these logs.
 func SetGlobalLogHandler(h slog.Handler) {
-	log.SetDefault(log.NewLogger(h))
+	l := log.NewLogger(h)
+	ctx := logfilter.AddLogAttrToContext(context.Background(), "global", true)
+	l.SetContext(ctx)
+	log.SetDefault(l)
 }
 
 // DefaultCLIConfig creates a default log configuration.
@@ -229,12 +283,43 @@ func DefaultCLIConfig() CLIConfig {
 	}
 }
 
-func ReadCLIConfig(ctx *cli.Context) CLIConfig {
+func ReadCLIConfig(ctx cliiface.Context) CLIConfig {
 	cfg := DefaultCLIConfig()
 	cfg.Level = ctx.Generic(LevelFlagName).(*LevelFlagValue).Level()
 	cfg.Format = ctx.Generic(FormatFlagName).(*FormatFlagValue).FormatType()
 	if ctx.IsSet(ColorFlagName) {
 		cfg.Color = ctx.Bool(ColorFlagName)
 	}
+	cfg.Pid = ctx.Bool(PidFlagName)
 	return cfg
+}
+
+// ReadTestCLIConfig reads the CLI config from flags and environment variables into a CLIConfig.
+// flag.Parse() must be called before calling this function.
+func ReadTestCLIConfig() CLIConfig {
+	*flFormat = "logfmtms" // override the default cli format of text
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		*flLevel = v
+	}
+	if v := os.Getenv("LOG_FORMAT"); v != "" {
+		*flFormat = v
+	}
+	if v := os.Getenv("LOG_COLOR"); v != "" {
+		*flColor = v == "true"
+	}
+	if v := os.Getenv("LOG_PID"); v != "" {
+		*flPID = v == "true"
+	}
+
+	lvl, err := LevelFromString(*flLevel)
+	if err != nil {
+		panic(fmt.Errorf("failed to parse log level: %w", err))
+	}
+
+	return CLIConfig{
+		Level:  lvl,
+		Format: FormatType(*flFormat),
+		Color:  term.IsTerminal(int(os.Stdout.Fd())) || *flColor,
+		Pid:    *flPID,
+	}
 }
